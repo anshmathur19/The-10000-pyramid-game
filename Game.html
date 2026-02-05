@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>$100,000 Pyramid – MVP v1.0</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Segoe UI, sans-serif;
+  background:radial-gradient(circle at top,#222,#000);
+  color:#fff;
+  text-align:center;
+}
+
+/* Screens */
+.screen{display:none;height:100vh;padding:24px}
+.active{display:block}
+
+/* Buttons */
+button{
+  padding:14px 30px;
+  font-size:18px;
+  border-radius:10px;
+  border:none;
+  cursor:pointer;
+  margin:10px;
+}
+.primary{background:#ff9800;color:#000}
+.correct{background:#4caf50;color:#fff}
+.skip{background:#e53935;color:#fff}
+.muted{background:#666}
+
+/* Inputs */
+input,textarea,select{
+  padding:12px;
+  font-size:16px;
+  width:60%;
+  border-radius:8px;
+  border:none;
+  margin:8px;
+}
+
+/* Header */
+.header{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.round-indicator{
+  font-size:20px;
+  color:#ff9800;
+}
+
+/* Timer */
+.timer-wrap{
+  position:relative;
+  width:320px;
+  height:320px;
+  margin:20px auto;
+}
+.timer-text{
+  position:absolute;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+  font-size:96px;
+  font-weight:bold;
+}
+svg{transform:rotate(-90deg)}
+circle{fill:none;stroke-width:16}
+.bg{stroke:#333}
+.progress{
+  stroke:#ff9800;
+  stroke-linecap:round;
+  transition:stroke-dashoffset 1s linear;
+}
+
+/* Topic */
+.topic{
+  font-size:72px;
+  font-weight:bold;
+  margin:20px auto;
+  max-width:90%;
+}
+
+/* Pyramid */
+.pyramid{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+}
+.level{
+  background:#333;
+  margin:6px;
+  padding:14px 24px;
+  width:60%;
+  border-radius:8px;
+}
+.level.active{background:#ff9800;color:#000;font-weight:bold}
+
+/* Score */
+.scoreboard p{font-size:26px}
+.highlight{color:gold;font-size:32px}
+</style>
+</head>
+
+<body>
+
+<!-- AUDIO -->
+<audio id="tick" src="https://assets.mixkit.co/sfx/preview/mixkit-clock-tick-1059.mp3"></audio>
+<audio id="correctS" src="https://assets.mixkit.co/sfx/preview/mixkit-correct-answer-tone-2870.mp3"></audio>
+<audio id="skipS" src="https://assets.mixkit.co/sfx/preview/mixkit-wrong-answer-fail-notification-946.mp3"></audio>
+<audio id="timeUp" src="https://assets.mixkit.co/sfx/preview/mixkit-game-over-arcade-643.mp3"></audio>
+
+<!-- NEW -->
+<div id="screen-new" class="screen active">
+<h1>$100,000 Pyramid</h1>
+<button class="primary" onclick="go('teams')">New Game</button>
+</div>
+
+<!-- TEAMS -->
+<div id="screen-teams" class="screen">
+<h2>Number of Teams</h2>
+<input id="teamCount" type="number" min="1" max="6">
+<br><button class="primary" onclick="setupTeams()">Next</button>
+</div>
+
+<!-- ROUND -->
+<div id="screen-round" class="screen">
+<h2>Select Starting Round</h2>
+<select id="roundSelect">
+<option value="1">Warm-Up</option>
+<option value="2">Speed</option>
+<option value="3">Challenge</option>
+<option value="4">Final</option>
+</select>
+<br><button class="primary" onclick="initRound()">Next</button>
+</div>
+
+<!-- TOPICS -->
+<div id="screen-topics" class="screen">
+<h2 id="roundTitle"></h2>
+<h3>Topics for <span id="topicTeam"></span></h3>
+<textarea id="topicsInput" rows="7"></textarea>
+<br><button class="primary" onclick="saveTopics()">Save Topics</button>
+<p id="topicError" style="color:#ff5252"></p>
+</div>
+
+<!-- START -->
+<div id="screen-start" class="screen">
+<h2 id="startRoundText"></h2>
+<button class="primary" onclick="unlockAudio();startRound()">START ROUND</button>
+<button id="muteBtn" class="muted" onclick="toggleMute()">🔊</button>
+</div>
+
+<!-- PLAY -->
+<div id="screen-play" class="screen">
+<div class="header">
+  <div id="playTeam"></div>
+  <div class="round-indicator" id="roundIndicator"></div>
+</div>
+
+<div class="timer-wrap">
+<svg width="320" height="320">
+<circle class="bg" cx="160" cy="160" r="145"/>
+<circle class="progress" cx="160" cy="160" r="145"
+ stroke-dasharray="911" stroke-dashoffset="0"/>
+</svg>
+<div class="timer-text" id="timerText"></div>
+</div>
+
+<div class="topic" id="topicText"></div>
+<button class="correct" onclick="correct()">Correct</button>
+<button class="skip" id="skipBtn" onclick="skip()">Skip</button>
+</div>
+
+<!-- TEAM RESULT -->
+<div id="screen-team-result" class="screen">
+<h2 id="teamResultText"></h2>
+<button class="primary" onclick="nextTeam()">Next Team</button>
+</div>
+
+<!-- SCORE -->
+<div id="screen-score" class="screen">
+<h2>Scoreboard</h2>
+<div id="scoreboard"></div>
+<button class="primary" onclick="confirmNextRound()">Next Round</button>
+</div>
+
+<!-- FINAL -->
+<div id="screen-final" class="screen">
+<h1>🏆 Final Results</h1>
+<div id="finalScores"></div>
+</div>
+
+<script>
+/* --- STATE --- */
+let teams=[],round=1,currentTeam=0,currentTopic=0
+let timer,timeLeft,muted=false,audioUnlocked=false
+const len=911
+
+const roundMeta={
+1:{name:'WARM-UP',time:30,pts:1,skip:true,topics:6},
+2:{name:'SPEED',time:25,pts:2,skip:true,topics:6},
+3:{name:'CHALLENGE',time:30,pts:3,skip:true,topics:7},
+4:{name:'FINAL',time:45,pts:5,skip:false,topics:6}
+}
+
+/* --- AUDIO --- */
+function unlockAudio(){
+ if(audioUnlocked)return
+ audioUnlocked=true
+ ;[tick,correctS,skipS,timeUp].forEach(a=>{
+  a.volume=0.3;a.play().then(()=>{a.pause();a.currentTime=0}).catch(()=>{})
+ })
+}
+function toggleMute(){
+ muted=!muted
+ muteBtn.textContent=muted?'🔇':'🔊'
+}
+
+/* --- NAV --- */
+function go(s){
+ document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'))
+ document.getElementById('screen-'+s).classList.add('active')
+}
+
+/* --- SETUP --- */
+function setupTeams(){
+ teams=[]
+ for(let i=1;i<=teamCount.value;i++)
+  teams.push({name:`Team ${i}`,score:0,topics:[],roundScore:0})
+ go('round')
+}
+function initRound(){
+ round=parseInt(roundSelect.value)
+ prepareTopics()
+}
+function prepareTopics(){
+ currentTeam=0
+ teams.forEach(t=>t.topics=[])
+ roundTitle.textContent=`Round ${round} – ${roundMeta[round].name}`
+ loadTopicEntry()
+}
+function loadTopicEntry(){
+ topicTeam.textContent=teams[currentTeam].name
+ topicsInput.value=''
+ topicError.textContent=''
+ go('topics')
+}
+function saveTopics(){
+ const arr=topicsInput.value.split('\n').filter(x=>x.trim())
+ if(arr.length!==roundMeta[round].topics){
+  topicError.textContent=`Need exactly ${roundMeta[round].topics} topics`
+  return
+ }
+ teams[currentTeam].topics=arr
+ currentTeam++
+ if(currentTeam<teams.length && !(round===4 && currentTeam>0))loadTopicEntry()
+ else{
+  startRoundText.textContent=`Start Round ${round}`
+  go('start')
+ }
+}
+
+/* --- GAMEPLAY --- */
+function startRound(){
+ currentTeam=0
+ startTurn()
+}
+function startTurn(){
+ currentTopic=0
+ teams[currentTeam].roundScore=0
+ playTeam.textContent=teams[currentTeam].name
+ roundIndicator.textContent=`ROUND ${round} – ${roundMeta[round].name}`
+ skipBtn.style.display=roundMeta[round].skip?'inline-block':'none'
+ showTopic();startTimer();go('play')
+}
+function startTimer(){
+ clearInterval(timer)
+ timeLeft=roundMeta[round].time
+ updateTimer()
+ timer=setInterval(()=>{
+  if(!muted){tick.currentTime=0;tick.play()}
+  timeLeft--;updateTimer()
+  if(timeLeft<=0){if(!muted)timeUp.play();nextTopic()}
+ },1000)
+}
+function updateTimer(){
+ timerText.textContent=timeLeft
+ document.querySelector('.progress').style.strokeDashoffset=
+  len*(1-timeLeft/roundMeta[round].time)
+}
+function showTopic(){topicText.textContent=teams[currentTeam].topics[currentTopic]}
+function correct(){
+ if(!muted)correctS.play()
+ teams[currentTeam].score+=roundMeta[round].pts
+ teams[currentTeam].roundScore+=roundMeta[round].pts
+ nextTopic()
+}
+function skip(){if(!muted)skipS.play();nextTopic()}
+function nextTopic(){
+ clearInterval(timer);currentTopic++
+ if(currentTopic<teams[currentTeam].topics.length){showTopic();startTimer()}
+ else{
+  teamResultText.textContent=
+   `${teams[currentTeam].name} scored ${teams[currentTeam].roundScore} points`
+  go('team-result')
+ }
+}
+function nextTeam(){
+ currentTeam++
+ if(currentTeam<teams.length && !(round===4 && currentTeam>0))startTurn()
+ else showScores()
+}
+
+/* --- SCORES --- */
+function showScores(){
+ scoreboard.innerHTML=''
+ teams.forEach(t=>scoreboard.innerHTML+=`<p>${t.name}: ${t.score}</p>`)
+ go('score')
+}
+function confirmNextRound(){
+ if(confirm('Move to next round?'))nextRound()
+}
+function nextRound(){
+ if(round<4){round++;prepareTopics()}
+ else if(confirm('End game and show results?'))showFinal()
+}
+function showFinal(){
+ teams.sort((a,b)=>b.score-a.score)
+ finalScores.innerHTML=''
+ teams.forEach((t,i)=>
+  finalScores.innerHTML+=`<p class="${i===0?'highlight':''}">${t.name}: ${t.score}</p>`
+ )
+ go('final')
+}
+
+/* --- KEYBOARD --- */
+document.addEventListener('keydown',e=>{
+ if(!document.getElementById('screen-play').classList.contains('active'))return
+ if(e.code==='Space'){e.preventDefault();correct()}
+ if(e.code==='Enter'){e.preventDefault();skip()}
+ if(e.key==='m'||e.key==='M')toggleMute()
+})
+</script>
+
+</body>
+</html>
